@@ -2,28 +2,51 @@
 # brain — CLI for the Obsidian memory vault
 # Usage: brain [command] [args]
 
-VAULT="$HOME/Documents/obsidian-vault"
+VAULT="${CORTEX_VAULT:-$HOME/Documents/obsidian-vault}"
 MEMORY="$VAULT/claude-memory"
+
+# ── dependency checks ─────────────────────────────────────────────────────────
+
+_require() {
+  if ! command -v "$1" &>/dev/null; then
+    echo "brain: '$1' is required but not installed."
+    echo "  Install: $2"
+    exit 1
+  fi
+}
+
+_require_search() {
+  _require rg  "sudo apt install ripgrep  /  brew install ripgrep  /  paru -S ripgrep"
+  _require fzf "sudo apt install fzf      /  brew install fzf      /  paru -S fzf"
+}
+
+# ── usage ─────────────────────────────────────────────────────────────────────
 
 _usage() {
   cat <<EOF
 brain — Obsidian vault CLI
 
 Commands:
-  boot         Print SESSION_BOOTSTRAP to stdout (paste into Claude)
-  add <title>  Quick-capture a note to vault (opens \$EDITOR)
+  boot         Print SESSION_BOOTSTRAP to stdout (paste into any AI)
+  today        Open/create today's daily note in \$EDITOR
   mem <title>  Add a new Claude memory file
+  add <title>  Quick-capture a note to vault (opens \$EDITOR)
   search [q]   Fuzzy search vault with fzf+ripgrep
   grep <term>  Ripgrep search across vault
   sync         Git commit + push vault to GitHub
   status       Show git status of vault
   log          Show recent vault commits
-  today        Open/create today's daily note in \$EDITOR
   ls           List vault files
-  read <file>  Cat a vault file (tab-complete with ls)
+  read <file>  Print a vault file
+
+Env:
+  CORTEX_VAULT  Override vault path (default: ~/Documents/obsidian-vault)
+  EDITOR        Editor for today/add/mem (default: nano)
 
 EOF
 }
+
+# ── commands ──────────────────────────────────────────────────────────────────
 
 _sync() {
   cd "$VAULT" || exit 1
@@ -37,10 +60,13 @@ _sync() {
 }
 
 _boot() {
-  cat "$VAULT/SESSION_BOOTSTRAP.md"
+  local f="$VAULT/SESSION_BOOTSTRAP.md"
+  [[ -f "$f" ]] || { echo "brain: SESSION_BOOTSTRAP.md not found at $f"; exit 1; }
+  cat "$f"
 }
 
 _search() {
+  _require_search
   local query="${*:-}"
   if [[ -z "$query" ]]; then
     rg --files "$VAULT" | fzf --preview 'cat {}' --preview-window=right:60%
@@ -50,6 +76,7 @@ _search() {
 }
 
 _grep() {
+  _require rg "sudo apt install ripgrep  /  brew install ripgrep  /  paru -S ripgrep"
   rg --color=always "$@" "$VAULT"
 }
 
@@ -57,8 +84,14 @@ _today() {
   local today
   today=$(date '+%Y-%m-%d')
   local note="$VAULT/daily-notes/${today}.md"
+  mkdir -p "$VAULT/daily-notes"
   if [[ ! -f "$note" ]]; then
-    sed "s/{{date:YYYY-MM-DD}}/$today/g" "$VAULT/templates/daily-note.md" > "$note"
+    local tmpl="$VAULT/templates/daily-note.md"
+    if [[ -f "$tmpl" ]]; then
+      sed "s/{{date:YYYY-MM-DD}}/$today/g" "$tmpl" > "$note"
+    else
+      printf "# %s — Daily Note\n\n## Focus\n\n## Brain Dump\n\n## Claude Sessions\n\n## Memory Updates\n" "$today" > "$note"
+    fi
     echo "Created: $note"
   fi
   "${EDITOR:-nano}" "$note"
@@ -69,6 +102,7 @@ _add() {
   local slug
   slug=$(echo "$title" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g')
   local file="$VAULT/projects/${slug}.md"
+  mkdir -p "$VAULT/projects"
   echo "# $title" > "$file"
   echo "" >> "$file"
   "${EDITOR:-nano}" "$file"
@@ -80,10 +114,19 @@ _mem() {
   local slug
   slug=$(echo "$title" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g')
   local file="$MEMORY/${slug}.md"
-  sed "s/{{title}}/$title/g; s/{{content}}//g" "$VAULT/templates/memory-capture.md" > "$file"
+  local today
+  today=$(date '+%Y-%m-%d')
+  local tmpl="$VAULT/templates/memory-capture.md"
+  if [[ -f "$tmpl" ]]; then
+    sed "s/{{title}}/$title/g; s/{{date}}/$today/g; s/{{content}}//g" "$tmpl" > "$file"
+  else
+    printf -- "---\nname: %s\ndescription: \ntype: user | feedback | project | reference\ntags: []\nstatus: \nupdated: %s\nrelated: []\n---\n\n" "$title" "$today" > "$file"
+  fi
   "${EDITOR:-nano}" "$file"
-  # Update MEMORY.md index
-  echo "- [${title}](${slug}.md) — " >> "$MEMORY/MEMORY.md"
+  # Update MEMORY.md with wikilink
+  local slug_name
+  slug_name=$(basename "$file" .md)
+  echo "- [[${slug_name}]] — " >> "$MEMORY/MEMORY.md"
   _sync
   echo "Memory saved: $file"
 }
@@ -101,6 +144,7 @@ _ls() {
 
 _read() {
   local target="$1"
+  [[ -n "$target" ]] || { echo "Usage: brain read <file>"; exit 1; }
   if [[ -f "$VAULT/$target" ]]; then
     cat "$VAULT/$target"
   elif [[ -f "$target" ]]; then
@@ -111,18 +155,20 @@ _read() {
   fi
 }
 
+# ── dispatch ──────────────────────────────────────────────────────────────────
+
 case "${1:-help}" in
-  boot)       _boot ;;
-  add)        shift; _add "$@" ;;
-  mem)        shift; _mem "$@" ;;
-  search|s)   shift; _search "$@" ;;
-  grep|g)     shift; _grep "$@" ;;
-  sync)       _sync ;;
-  status|st)  _status ;;
-  log)        cd "$VAULT" && git log --oneline -20 ;;
-  today|t)    _today ;;
-  ls)         _ls ;;
-  read|cat)   shift; _read "$@" ;;
+  boot)         _boot ;;
+  add)          shift; _add "$@" ;;
+  mem)          shift; _mem "$@" ;;
+  search|s)     shift; _search "$@" ;;
+  grep|g)       shift; _grep "$@" ;;
+  sync)         _sync ;;
+  status|st)    _status ;;
+  log)          cd "$VAULT" && git log --oneline -20 ;;
+  today|t)      _today ;;
+  ls)           _ls ;;
+  read|cat)     shift; _read "$@" ;;
   help|--help|-h) _usage ;;
-  *)          echo "Unknown command: $1"; _usage; exit 1 ;;
+  *)            echo "Unknown command: $1"; _usage; exit 1 ;;
 esac

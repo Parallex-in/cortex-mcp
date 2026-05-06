@@ -27,7 +27,7 @@ Works with **Claude Code, Cursor, Windsurf, Zed**, and any other editor or CLI t
 ## Setup
 
 ```bash
-git clone https://github.com/your-username/cortex-mcp
+git clone https://github.com/Parallex-in/cortex-mcp
 cd cortex-mcp
 bash setup.sh
 ```
