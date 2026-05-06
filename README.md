@@ -1,6 +1,8 @@
 # cortex-mcp
 
-A persistent AI memory system for Claude Code — built on an Obsidian vault, a purpose-built MCP server, and a brain CLI. Gives Claude structured, searchable, token-efficient access to everything it needs to remember about you and your projects.
+A persistent AI memory system for any MCP-compatible AI tool — built on an Obsidian vault, a purpose-built MCP server, and a brain CLI. Gives your AI structured, searchable, token-efficient access to everything it needs to remember about you and your projects.
+
+Works with **Claude Code, Cursor, Windsurf, Zed**, and any other editor or CLI that supports the [Model Context Protocol](https://modelcontextprotocol.io). No MCP support? Use `brain boot` to paste your full context into any AI manually.
 
 ## What it does
 
@@ -8,8 +10,19 @@ A persistent AI memory system for Claude Code — built on an Obsidian vault, a 
 |-------|------|---------|
 | Vault | Obsidian | Human-readable memory store, graph view, daily notes |
 | CLI | `brain` | Interactive vault access from terminal |
-| MCP | `cortex` | Claude's programmatic API into the vault |
+| MCP | `cortex` | Your AI's programmatic API into the vault |
 | Sync | Git | Everything backed up to GitHub automatically |
+
+## Compatibility
+
+| Tool | Support |
+|------|---------|
+| Claude Code | ✅ Full MCP |
+| Cursor | ✅ Full MCP |
+| Windsurf | ✅ Full MCP |
+| Zed | ✅ Full MCP |
+| Any MCP client | ✅ Full MCP |
+| OpenAI Codex CLI, Gemini CLI, ChatGPT, etc. | ⚡ Partial — use `brain boot` to paste context manually |
 
 ## Setup
 
@@ -29,7 +42,39 @@ bash setup.sh
 Then:
 1. Edit `SESSION_BOOTSTRAP.md` with your details
 2. Add initial memory files with `brain mem`
-3. Restart Claude Code
+3. Restart your AI tool
+
+### Manual config (if not using setup.sh)
+
+Add this to your tool's MCP config:
+
+**Claude Code** (`~/.claude/settings.json`)
+```json
+{
+  "mcpServers": {
+    "cortex": {
+      "command": "node",
+      "args": ["/path/to/vault/mcp-server/dist/index.js"],
+      "env": { "CORTEX_VAULT": "/path/to/vault" }
+    }
+  }
+}
+```
+
+**Cursor / Windsurf** (`~/.cursor/mcp.json` or `~/.codeium/windsurf/mcp_settings.json`)
+```json
+{
+  "mcpServers": {
+    "cortex": {
+      "command": "node",
+      "args": ["/path/to/vault/mcp-server/dist/index.js"],
+      "env": { "CORTEX_VAULT": "/path/to/vault" }
+    }
+  }
+}
+```
+
+**No MCP support?** Run `brain boot` and paste the output at the start of any AI conversation.
 
 ## brain CLI
 
