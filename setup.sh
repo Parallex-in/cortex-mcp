@@ -75,18 +75,27 @@ log "MCP server built: $MCP_DIR/dist/index.js"
 BRAIN_DEST="$HOME/.local/bin/brain"
 mkdir -p "$HOME/.local/bin"
 
-# Write brain with the correct vault path embedded
-sed "s|VAULT=.*|VAULT=\"$VAULT\"|" "$SCRIPT_DIR/brain" > "$BRAIN_DEST"
-# Also set MEMORY path
-sed -i "s|MEMORY=.*|MEMORY=\"$VAULT/claude-memory\"|" "$BRAIN_DEST"
+# Copy brain as-is — it already reads CORTEX_VAULT env var
+cp "$SCRIPT_DIR/brain" "$BRAIN_DEST"
 chmod +x "$BRAIN_DEST"
+
+# Determine shell RC file
+SHELL_RC="$HOME/.bashrc"
+[[ "$SHELL" == */zsh ]] && SHELL_RC="$HOME/.zshrc"
 
 # Ensure ~/.local/bin is in PATH
 if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
-  SHELL_RC="$HOME/.bashrc"
-  [[ "$SHELL" == */zsh ]] && SHELL_RC="$HOME/.zshrc"
   echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$SHELL_RC"
-  warn "Added ~/.local/bin to PATH in $SHELL_RC — restart your shell or run: export PATH=\"\$HOME/.local/bin:\$PATH\""
+  warn "Added ~/.local/bin to PATH in $SHELL_RC"
+fi
+
+# Export CORTEX_VAULT if vault is not the default location
+DEFAULT_VAULT_EXPANDED="$HOME/Documents/obsidian-vault"
+if [[ "$VAULT" != "$DEFAULT_VAULT_EXPANDED" ]]; then
+  if ! grep -q "CORTEX_VAULT" "$SHELL_RC" 2>/dev/null; then
+    echo "export CORTEX_VAULT=\"$VAULT\"" >> "$SHELL_RC"
+    log "Added CORTEX_VAULT to $SHELL_RC"
+  fi
 fi
 
 log "brain CLI installed: $BRAIN_DEST"
@@ -104,25 +113,28 @@ fi
 cp "$SETTINGS" "${SETTINGS}.bak"
 log "Backed up settings.json → settings.json.bak"
 
-# Inject cortex MCP entry using node (safe JSON manipulation)
-node - <<EOF
-const fs = require('fs');
-const settings = JSON.parse(fs.readFileSync('$SETTINGS', 'utf8'));
-settings.mcpServers = settings.mcpServers ?? {};
-settings.mcpServers.cortex = {
+# Inject cortex MCP entry using node (safe JSON manipulation, no path interpolation)
+node -e "
+  const fs = require('fs');
+  const settingsPath = process.argv[1];
+  const mcpEntry = JSON.parse(process.argv[2]);
+  const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  settings.mcpServers = settings.mcpServers ?? {};
+  settings.mcpServers.cortex = mcpEntry;
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+" "$SETTINGS" "$(node -e "process.stdout.write(JSON.stringify({
   command: 'node',
   args: ['$MCP_DIR/dist/index.js'],
   env: { CORTEX_VAULT: '$VAULT' }
-};
-fs.writeFileSync('$SETTINGS', JSON.stringify(settings, null, 2) + '\n');
-EOF
+}))")"
 
 log "Wired cortex MCP into ~/.claude/settings.json"
 
 # ── 6. Git init ───────────────────────────────────────────────────────────────
 
 if [[ ! -d "$VAULT/.git" ]]; then
-  git -C "$VAULT" init -b main
+  git -C "$VAULT" init -b main 2>/dev/null || \
+    (git -C "$VAULT" init && git -C "$VAULT" checkout -b main 2>/dev/null || true)
   git -C "$VAULT" add -A
   git -C "$VAULT" commit -m "init: cortex vault"
   log "Git repository initialized"
