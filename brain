@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# brain — CLI for the Obsidian memory vault
+# Usage: brain [command] [args]
+
+VAULT="$HOME/Documents/obsidian-vault"
+MEMORY="$VAULT/claude-memory"
+
+_usage() {
+  cat <<EOF
+brain — Obsidian vault CLI
+
+Commands:
+  boot         Print SESSION_BOOTSTRAP to stdout (paste into Claude)
+  add <title>  Quick-capture a note to vault (opens \$EDITOR)
+  mem <title>  Add a new Claude memory file
+  search [q]   Fuzzy search vault with fzf+ripgrep
+  grep <term>  Ripgrep search across vault
+  sync         Git commit + push vault to GitHub
+  status       Show git status of vault
+  log          Show recent vault commits
+  today        Open/create today's daily note in \$EDITOR
+  ls           List vault files
+  read <file>  Cat a vault file (tab-complete with ls)
+
+EOF
+}
+
+_sync() {
+  cd "$VAULT" || exit 1
+  git add -A
+  if git diff --cached --quiet; then
+    echo "vault: nothing to commit"
+  else
+    git commit -m "manual sync: $(date '+%Y-%m-%d %H:%M:%S')"
+    git push origin main && echo "vault: pushed to GitHub"
+  fi
+}
+
+_boot() {
+  cat "$VAULT/SESSION_BOOTSTRAP.md"
+}
+
+_search() {
+  local query="${*:-}"
+  if [[ -z "$query" ]]; then
+    rg --files "$VAULT" | fzf --preview 'cat {}' --preview-window=right:60%
+  else
+    rg -l "$query" "$VAULT" 2>/dev/null | fzf --preview "rg --color=always '$query' {}" --preview-window=right:60%
+  fi
+}
+
+_grep() {
+  rg --color=always "$@" "$VAULT"
+}
+
+_today() {
+  local today
+  today=$(date '+%Y-%m-%d')
+  local note="$VAULT/daily-notes/${today}.md"
+  if [[ ! -f "$note" ]]; then
+    sed "s/{{date:YYYY-MM-DD}}/$today/g" "$VAULT/templates/daily-note.md" > "$note"
+    echo "Created: $note"
+  fi
+  "${EDITOR:-nano}" "$note"
+}
+
+_add() {
+  local title="${*:-$(date '+%Y-%m-%d %H:%M')}"
+  local slug
+  slug=$(echo "$title" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g')
+  local file="$VAULT/projects/${slug}.md"
+  echo "# $title" > "$file"
+  echo "" >> "$file"
+  "${EDITOR:-nano}" "$file"
+  _sync
+}
+
+_mem() {
+  local title="${*:-new-memory}"
+  local slug
+  slug=$(echo "$title" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g')
+  local file="$MEMORY/${slug}.md"
+  sed "s/{{title}}/$title/g; s/{{content}}//g" "$VAULT/templates/memory-capture.md" > "$file"
+  "${EDITOR:-nano}" "$file"
+  # Update MEMORY.md index
+  echo "- [${title}](${slug}.md) — " >> "$MEMORY/MEMORY.md"
+  _sync
+  echo "Memory saved: $file"
+}
+
+_status() {
+  cd "$VAULT" || exit 1
+  git status --short
+  echo ""
+  git log --oneline -5
+}
+
+_ls() {
+  find "$VAULT" -name "*.md" ! -path "*/.obsidian/*" | sed "s|$VAULT/||" | sort
+}
+
+_read() {
+  local target="$1"
+  if [[ -f "$VAULT/$target" ]]; then
+    cat "$VAULT/$target"
+  elif [[ -f "$target" ]]; then
+    cat "$target"
+  else
+    echo "Not found: $target"
+    exit 1
+  fi
+}
+
+case "${1:-help}" in
+  boot)       _boot ;;
+  add)        shift; _add "$@" ;;
+  mem)        shift; _mem "$@" ;;
+  search|s)   shift; _search "$@" ;;
+  grep|g)     shift; _grep "$@" ;;
+  sync)       _sync ;;
+  status|st)  _status ;;
+  log)        cd "$VAULT" && git log --oneline -20 ;;
+  today|t)    _today ;;
+  ls)         _ls ;;
+  read|cat)   shift; _read "$@" ;;
+  help|--help|-h) _usage ;;
+  *)          echo "Unknown command: $1"; _usage; exit 1 ;;
+esac
